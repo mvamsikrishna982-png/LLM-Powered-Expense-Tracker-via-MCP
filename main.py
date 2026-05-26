@@ -7,20 +7,28 @@ import os, json, sqlite3, aiosqlite
 
 load_dotenv()
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-auth = GoogleProvider(
-    client_id=os.environ.get("GOOGLE_CLIENT_ID", "build-placeholder"),
-    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "build-placeholder"),
-    base_url=os.environ.get("BASE_URL", "http://localhost:8000/mcp")
-)
-mcp = FastMCP("ExpenseTracker", auth=auth)
 
-# ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
-TEMP_DIR = tempfile.gettempdir()
-DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
-# DB_PATH = os.environ.get("DB_PATH", "expenses.db")
 
-CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
+try:
+    # ── Auth ──────────────────────────────────────────────────────────────────────
+    auth = GoogleProvider(
+        client_id=os.environ.get("GOOGLE_CLIENT_ID", "build-placeholder"),
+        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "build-placeholder"),
+        base_url=os.environ.get("BASE_URL", "http://localhost:8000/mcp")
+    )
+    mcp = FastMCP("ExpenseTracker", auth=auth)
+
+
+    # ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
+    TEMP_DIR = tempfile.gettempdir()
+    DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
+    # DB_PATH = os.environ.get("DB_PATH", "expenses.db")
+    CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
+    
+except KeyError as e:
+    # This will print a clear red error in your Perfect Horizon deployment logs
+    raise RuntimeError(f"CRITICAL: Missing environment variable {e}. Check your Perfect Horizon dashboard.")
+
 
 DEFAULT_CATEGORIES = [
     "Food & Dining", "Transportation", "Shopping",
@@ -29,23 +37,27 @@ DEFAULT_CATEGORIES = [
 ]
 
 # ── Schema init ───────────────────────────────────────────────────────────────
-def init_db():
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS expenses(
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     TEXT    NOT NULL,
-                date        TEXT    NOT NULL,
-                amount      REAL    NOT NULL,
-                category    TEXT    NOT NULL,
-                subcategory TEXT    DEFAULT '',
-                note        TEXT    DEFAULT ''
-            )
-        """)
-        # Index makes per-user queries fast even with 100k+ rows
-        c.execute("CREATE INDEX IF NOT EXISTS idx_user ON expenses(user_id)")
+try:
+    async def init_db():
+        with sqlite3.connect(DB_PATH) as c:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS expenses(
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id     TEXT    NOT NULL,
+                    date        TEXT    NOT NULL,
+                    amount      REAL    NOT NULL,
+                    category    TEXT    NOT NULL,
+                    subcategory TEXT    DEFAULT '',
+                    note        TEXT    DEFAULT ''
+                )
+            """)
+            # Index makes per-user queries fast even with 100k+ rows
+            c.execute("CREATE INDEX IF NOT EXISTS idx_user ON expenses(user_id)")
     print(f"DB ready at {DB_PATH}")
+except Exception as e:
+    print(f"❌ DB init failed: {e}")  
+    raise
 
 init_db()
 
@@ -128,5 +140,5 @@ def categories() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
     # mcp.run()
