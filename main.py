@@ -4,12 +4,11 @@ from dotenv import load_dotenv
 import os
 import sqlite3
 import aiosqlite
-
+import tempfile
 load_dotenv()
-
-DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(__file__))
-DB_PATH = os.path.join(DATA_DIR, "expenses.db")
-CATEGORIES_PATH = os.path.join(DATA_DIR, "categories.json")
+TEMP_DIR = tempfile.gettempdir()
+DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
+CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
 
 # auth = GoogleProvider(
 #     client_id=os.environ["GOOGLE_CLIENT_ID"],
@@ -111,5 +110,5 @@ def categories():
         return json.dumps(default_categories, indent=2)
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=8000)
-    # mcp.run()
+    # mcp.run(transport="http", host="0.0.0.0", port=8000)
+    mcp.run()
