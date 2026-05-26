@@ -87,7 +87,9 @@ def current_user() -> str:
 async def add_expense(date: str, amount: float, category: str,
                       subcategory: str = "", note: str = "") -> dict:
     """Add a new expense. date must be YYYY-MM-DD."""
-    user_id = current_user()
+    # user_id = current_user()
+    user_id = 'test_1_'
+
     async with aiosqlite.connect(DB_PATH) as c:
         cur = await c.execute(
             "INSERT INTO expenses(user_id,date,amount,category,subcategory,note)"
