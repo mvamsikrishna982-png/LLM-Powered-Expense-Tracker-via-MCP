@@ -2,20 +2,23 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
+import tempfile
 import os, json, sqlite3, aiosqlite
 
 load_dotenv()
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 auth = GoogleProvider(
-    client_id=os.environ["GOOGLE_CLIENT_ID"],
-    client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-    base_url=os.environ["BASE_URL"],
+    client_id=os.environ.get("GOOGLE_CLIENT_ID", "build-placeholder"),
+    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "build-placeholder"),
+    base_url=os.environ.get("BASE_URL", "http://localhost:8000/mcp")
 )
 mcp = FastMCP("ExpenseTracker", auth=auth)
 
 # ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
-DB_PATH = os.environ.get("DB_PATH", "expenses.db")
+TEMP_DIR = tempfile.gettempdir()
+DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
+# DB_PATH = os.environ.get("DB_PATH", "expenses.db")
 
 CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
 
@@ -125,5 +128,5 @@ def categories() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    mcp.run()
+    mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    # mcp.run()
