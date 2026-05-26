@@ -3,7 +3,7 @@ from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
 import tempfile
-import os, json, sqlite3, aiosqlite
+import os, sys, json, sqlite3, aiosqlite
 
 load_dotenv()
 
@@ -12,12 +12,11 @@ load_dotenv()
 try:
     # ── Auth ──────────────────────────────────────────────────────────────────────
     auth = GoogleProvider(
-        client_id=os.environ.get("GOOGLE_CLIENT_ID", "build-placeholder"),
-        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "build-placeholder"),
-        base_url=os.environ.get("BASE_URL", "http://localhost:8000/mcp")
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        base_url=os.environ["BASE_URL"]
     )
     mcp = FastMCP("ExpenseTracker", auth=auth)
-
 
     # ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
     TEMP_DIR = tempfile.gettempdir()
@@ -37,8 +36,8 @@ DEFAULT_CATEGORIES = [
 ]
 
 # ── Schema init ───────────────────────────────────────────────────────────────
-try:
-    async def init_db():
+def init_db():
+    try:
         with sqlite3.connect(DB_PATH) as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.execute("""
@@ -52,12 +51,18 @@ try:
                     note        TEXT    DEFAULT ''
                 )
             """)
+            
+            # Check if user_id column exists (migration for older DBs)
+            columns = [col[1] for col in c.execute("PRAGMA table_info(expenses)")]
+            if "user_id" not in columns:
+                c.execute("ALTER TABLE expenses ADD COLUMN user_id TEXT NOT NULL DEFAULT 'unknown_user'")
+
             # Index makes per-user queries fast even with 100k+ rows
             c.execute("CREATE INDEX IF NOT EXISTS idx_user ON expenses(user_id)")
-    print(f"DB ready at {DB_PATH}")
-except Exception as e:
-    print(f"❌ DB init failed: {e}")  
-    raise
+        print(f"DB ready at {DB_PATH}", file=sys.stderr)
+    except Exception as e:
+        print(f"❌ DB init failed: {e}", file=sys.stderr)
+        raise
 
 init_db()
 
@@ -65,8 +70,9 @@ init_db()
 def current_user() -> str:
     """Extract a stable user identifier from the validated OAuth token."""
     token = get_access_token()
-    # client_id is the Google 'sub' — stable, unique per Google account
-    return token.client_id
+    # return token.client_id
+    # Use 'sub' or 'subject' for the unique user ID instead of your app's client_id
+    return getattr(token, "sub", getattr(token, "subject", "unknown_user"))
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 @mcp.tool()
@@ -140,5 +146,10 @@ def categories() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    # mcp.run()
+    # Detect environment: default to STDIO for Claude Desktop local testing, 
+    # but use HTTP if deployed to the cloud (Perfect Horizon/Render/etc.)
+    if os.environ.get("USE_HTTP_TRANSPORT") == "true":
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    else:
+        # stdio is required for Claude Desktop local direct connection
+        mcp.run()
