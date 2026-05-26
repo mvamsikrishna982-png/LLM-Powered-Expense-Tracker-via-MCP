@@ -11,12 +11,13 @@ load_dotenv()
 
 try:
     # ── Auth ──────────────────────────────────────────────────────────────────────
-    auth = GoogleProvider(
-        client_id=os.environ["GOOGLE_CLIENT_ID"],
-        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-        base_url=os.environ["BASE_URL"]
-    )
-    mcp = FastMCP("ExpenseTracker", auth=auth)
+    # auth = GoogleProvider(
+    #     client_id=os.environ["GOOGLE_CLIENT_ID"],
+    #     client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+    #     base_url=os.environ["BASE_URL"]
+    # )
+    # mcp = FastMCP("ExpenseTracker", auth=auth)
+    mcp = FastMCP("ExpenseTracker")
 
     # ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
     TEMP_DIR = tempfile.gettempdir()
@@ -69,10 +70,12 @@ init_db()
 # ── Helper ────────────────────────────────────────────────────────────────────
 def current_user() -> str:
     """Extract a stable user identifier from the validated OAuth token."""
-    token = get_access_token()
-    # return token.client_id
-    # Use 'sub' or 'subject' for the unique user ID instead of your app's client_id
-    return getattr(token, "sub", getattr(token, "subject", "unknown_user"))
+    # token = get_access_token()
+    # # return token.client_id
+    # # Use 'sub' or 'subject' for the unique user ID instead of your app's client_id
+    # return getattr(token, "sub", getattr(token, "subject", "unknown_user"))
+
+    return 'test_id_1'
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 @mcp.tool()
@@ -148,8 +151,10 @@ def categories() -> str:
 if __name__ == "__main__":
     # Detect environment: default to STDIO for Claude Desktop local testing, 
     # but use HTTP if deployed to the cloud (Perfect Horizon/Render/etc.)
-    if os.environ.get("USE_HTTP_TRANSPORT") == "true":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    else:
-        # stdio is required for Claude Desktop local direct connection
-        mcp.run()
+    # if os.environ.get("USE_HTTP_TRANSPORT") == "true":
+    #     mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    # else:
+    #     # stdio is required for Claude Desktop local direct connection
+    #     mcp.run()
+
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
