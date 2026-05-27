@@ -3,7 +3,9 @@ from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
 import os, json, asyncpg
 from contextlib import asynccontextmanager
-from ValidationModels import ExpenseInput,DateRangeInput,SummarizeInput
+from typing import Annotated,Field
+from datetime import datetime
+from ValidationModels import normalize_date
 
 load_dotenv()
 
@@ -54,33 +56,68 @@ mcp = FastMCP("ExpenseTracker", lifespan=lifespan)
 
 # Tools
 @mcp.tool()
-async def add_expense(expense: ExpenseInput) -> dict:
-    """Add a new expense. date must be YYYY-MM-DD."""
+async def add_expense(
+    date:        Annotated[str,   Field(...,      example="2026-05-28",        description="Date of the expense in YYYY-MM-DD format")],
+    amount:      Annotated[float, Field(..., gt=0, example=600.00,             description="Expense amount, must be greater than 0")],
+    category:    Annotated[str,   Field(...,      example="Healthcare",        description="Expense category")],
+    subcategory: Annotated[str,   Field("",       example="Consultation",      description="Optional subcategory of the expense")],
+    note:        Annotated[str,   Field("",       example="Doctor visit fee",  description="Optional note about the expense")]
+) -> dict:
+    """Add a new expense. date accepts YYYY-MM-DD."""
+    
+    # ── Validate here ─────────────────────────────────────────────────
+    try:
+        date = normalize_date(date)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    if amount <= 0:
+        return {"status": "error", "message": "Amount must be greater than 0."}
+    
+    amount = round(amount, 2)
+    
+    if not category.strip():
+        return {"status": "error", "message": "Category cannot be empty."}
+    
+    category = category.strip()
+    # ──────────────────────────────────────────────────────────────────
+
     conn = await get_db()
     try:
         row = await conn.fetchrow(
-                "INSERT INTO expenses(date, amount, category, subcategory, note)"
-                " VALUES($1, $2, $3, $4, $5) RETURNING id",
-                expense.date, expense.amount, expense.category, expense.subcategory, expense.note
-                )
+            "INSERT INTO expenses(date, amount, category, subcategory, note)"
+            " VALUES($1, $2, $3, $4, $5) RETURNING id",
+            date, amount, category, subcategory, note
+        )
         return {"status": "success", "id": row["id"]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
         await conn.close()
-        
+
 
 @mcp.tool()
-async def list_expenses(inputDate: DateRangeInput) -> list:
-    """List expenses between start_date and end_date (YYYY-MM-DD)."""
+async def list_expenses(
+    start_date: Annotated[str, Field(..., example="2026-05-01", description="Start date in YYYY-MM-DD format")],
+    end_date:   Annotated[str, Field(..., example="2026-05-31", description="End date in YYYY-MM-DD format")]
+) -> list:
+    """List expenses between start_date and end_date."""
+    try:
+        start_date = normalize_date(start_date)
+        end_date = normalize_date(end_date)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    if start_date > end_date:
+        return {"status": "error", "message": "start_date must be before end_date."}
+
     conn = await get_db()
     try:
         rows = await conn.fetch(
             "SELECT id, date, amount, category, subcategory, note"
-            " FROM expenses"
-            " WHERE date BETWEEN $1 AND $2"
+            " FROM expenses WHERE date BETWEEN $1 AND $2"
             " ORDER BY date DESC, id DESC",
-            inputDate.start_date, inputDate.end_date
+            start_date, end_date
         )
         return [dict(r) for r in rows]
     except Exception as e:
@@ -88,39 +125,37 @@ async def list_expenses(inputDate: DateRangeInput) -> list:
     finally:
         await conn.close()
 
+
 @mcp.tool()
-async def summarize(summrizerData:SummarizeInput) -> list:
+async def summarize(
+    start_date: Annotated[str, Field(...,  example="2026-05-01",   description="Start date in YYYY-MM-DD format")],
+    end_date:   Annotated[str, Field(...,  example="2026-05-31",   description="End date in YYYY-MM-DD format")],
+    category:   Annotated[str, Field("",  example="Healthcare",   description="Optional: filter by specific category")]
+) -> list:
     """Summarize spending by category between start_date and end_date."""
+    try:
+        start_date = normalize_date(start_date)
+        end_date = normalize_date(end_date)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    if start_date > end_date:
+        return {"status": "error", "message": "start_date must be before end_date."}
+
     query = (
         "SELECT category, SUM(amount) AS total_amount, COUNT(*) AS count"
         " FROM expenses WHERE date BETWEEN $1 AND $2"
     )
-    params = [summrizerData.start_date, summrizerData.end_date]
-    if summrizerData.category:
+    params = [start_date, end_date]
+    if category:
         query += " AND category = $3"
-        params.append(summrizerData.category)
+        params.append(category)
     query += " GROUP BY category ORDER BY total_amount DESC"
+
     conn = await get_db()
     try:
         rows = await conn.fetch(query, *params)
         return [dict(r) for r in rows]
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        await conn.close()
-
-@mcp.tool()
-async def delete_expense(expense_id: int) -> dict:
-    """Delete an expense by its ID."""
-    conn = await get_db()
-    try:
-        result = await conn.execute(
-            "DELETE FROM expenses WHERE id = $1",
-            expense_id
-        )
-        if result == "DELETE 0":
-            return {"status": "error", "message": "Expense not found"}
-        return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
