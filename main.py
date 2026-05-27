@@ -3,8 +3,8 @@ from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
 import os, json, asyncpg
 from contextlib import asynccontextmanager
-from typing import Annotated,Field
-from datetime import datetime
+from typing import Annotated
+from pydantic import Field
 from ValidationModels import normalize_date
 
 load_dotenv()
@@ -172,5 +172,5 @@ def categories() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    # mcp.run()
+    # mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    mcp.run()
