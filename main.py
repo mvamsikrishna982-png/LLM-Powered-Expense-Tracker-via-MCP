@@ -22,6 +22,8 @@ DEFAULT_CATEGORIES = [
 ]
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
+async def get_db():
+    return await asyncpg.connect(DATABASE_URL)
 
 @asynccontextmanager
 async def lifespan(app):
