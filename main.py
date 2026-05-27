@@ -1,23 +1,17 @@
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
-import tempfile
-import os, sys, json, sqlite3, aiosqlite
+import os, json, asyncpg
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
-
+# ── Auth ──────────────────────────────────────────────────────────────────────
 try:
-    # ── Auth ──────────────────────────────────────────────────────────────────────
-    mcp = FastMCP("ExpenseTracker")
-    TEMP_DIR = tempfile.gettempdir()
-    DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
-    # DB_PATH = os.environ.get("DB_PATH", "expenses.db")
+    DATABASE_URL = os.environ.get("DATABASE_URL")
     CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
     
 except KeyError as e:
-    # This will print a clear red error in your Perfect Horizon deployment logs
     raise RuntimeError(f"CRITICAL: Missing environment variable {e}. Check your Perfect Horizon dashboard.")
 
 
@@ -27,113 +21,111 @@ DEFAULT_CATEGORIES = [
     "Travel", "Education", "Business", "Other"
 ]
 
-# ── Schema init ───────────────────────────────────────────────────────────────
-def init_db():
-    try:
-        with sqlite3.connect(DB_PATH) as c:
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS expenses(
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id     TEXT    NOT NULL,
-                    date        TEXT    NOT NULL,
-                    amount      REAL    NOT NULL,
-                    category    TEXT    NOT NULL,
-                    subcategory TEXT    DEFAULT '',
-                    note        TEXT    DEFAULT ''
-                )
-            """)
-            
-            # Check if user_id column exists (migration for older DBs)
-            columns = [col[1] for col in c.execute("PRAGMA table_info(expenses)")]
-            if "user_id" not in columns:
-                c.execute("ALTER TABLE expenses ADD COLUMN user_id TEXT NOT NULL DEFAULT 'unknown_user'")
+# ── DB helpers ────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def get_db():
+    return await asyncpg.connect(DATABASE_URL)
 
-            # Index makes per-user queries fast even with 100k+ rows
-            c.execute("CREATE INDEX IF NOT EXISTS idx_user ON expenses(user_id)")
-        print(f"DB ready at {DB_PATH}", file=sys.stderr)
+async def lifespan(app):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id          SERIAL PRIMARY KEY,
+                date        DATE   NOT NULL,
+                amount      REAL   NOT NULL,
+                category    TEXT   NOT NULL,
+                subcategory TEXT   DEFAULT '',
+                note        TEXT   DEFAULT ''
+            )
+        """)
+        await conn.close()
+        print("DB connected and ready")
     except Exception as e:
-        print(f"❌ DB init failed: {e}", file=sys.stderr)
+        print(f"DB connection failed: {e}")
         raise
 
-init_db()
+    yield  
+    
+    print("Server shutting down")
 
-# ── Helper ────────────────────────────────────────────────────────────────────
-def current_user() -> str:
-    """Extract a stable user identifier from the validated OAuth token."""
-    try:
-        token = get_access_token()
+mcp = FastMCP("ExpenseTracker", lifespan=lifespan)
 
-        return getattr(
-            token,
-            "sub",
-            getattr(token, "subject", "unknown_user")
-        )
-    except Exception as e:
-        
-         raise RuntimeError(f"Not able to Authenticate the user{e}")
-
-# ── Tools ─────────────────────────────────────────────────────────────────────
+# Tools
 @mcp.tool()
 async def add_expense(date: str, amount: float, category: str,
                       subcategory: str = "", note: str = "") -> dict:
     """Add a new expense. date must be YYYY-MM-DD."""
-    # user_id = current_user()
-    user_id = 'test_1_'
-    async with aiosqlite.connect(DB_PATH) as c:
-        cur = await c.execute(
-            "INSERT INTO expenses(user_id,date,amount,category,subcategory,note)"
-            " VALUES (?,?,?,?,?,?)",
-            (user_id, date, amount, category, subcategory, note),
-        )
-        await c.commit()
-        return {"status": "success", "id": cur.lastrowid}
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+                "INSERT INTO expenses(date, amount, category, subcategory, note)"
+                " VALUES($1, $2, $3, $4, $5) RETURNING id",
+                date, amount, category, subcategory, note
+                )
+        return {"status": "success", "id": row["id"]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
+        
 
 @mcp.tool()
 async def list_expenses(start_date: str, end_date: str) -> list:
-    """List your expenses between start_date and end_date (YYYY-MM-DD, inclusive)."""
-    user_id = current_user()
-    async with aiosqlite.connect(DB_PATH) as c:
-        cur = await c.execute(
-            "SELECT id,date,amount,category,subcategory,note FROM expenses"
-            " WHERE user_id=? AND date BETWEEN ? AND ?"
+    """List expenses between start_date and end_date (YYYY-MM-DD)."""
+    conn = await get_db()
+    try:
+        rows = await conn.fetch(
+            "SELECT id, date, amount, category, subcategory, note"
+            " FROM expenses"
+            " WHERE date BETWEEN $1 AND $2"
             " ORDER BY date DESC, id DESC",
-            (user_id, start_date, end_date),
+            start_date, end_date
         )
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in await cur.fetchall()]
+        return [dict(r) for r in rows]
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
 
 @mcp.tool()
-async def summarize(start_date: str, end_date: str, category: str = "") -> list:
-    """Summarize your spending by category between start_date and end_date."""
-    user_id = current_user()
+async def summarize(start_date: str, end_date: str,
+                    category: str = "") -> list:
+    """Summarize spending by category between start_date and end_date."""
     query = (
         "SELECT category, SUM(amount) AS total_amount, COUNT(*) AS count"
-        " FROM expenses WHERE user_id=? AND date BETWEEN ? AND ?"
+        " FROM expenses WHERE date BETWEEN $1 AND $2"
     )
-    params: list = [user_id, start_date, end_date]
+    params = [start_date, end_date]
     if category:
-        query += " AND category=?"
+        query += " AND category = $3"
         params.append(category)
     query += " GROUP BY category ORDER BY total_amount DESC"
-    async with aiosqlite.connect(DB_PATH) as c:
-        cur = await c.execute(query, params)
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in await cur.fetchall()]
+    conn = await get_db()
+    try:
+        rows = await conn.fetch(query, *params)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
 
 @mcp.tool()
 async def delete_expense(expense_id: int) -> dict:
-    """Delete one of your expenses by its ID."""
-    user_id = current_user()
-    async with aiosqlite.connect(DB_PATH) as c:
-        cur = await c.execute(
-            "DELETE FROM expenses WHERE id=? AND user_id=?",  # user_id guard!
-            (expense_id, user_id),
+    """Delete an expense by its ID."""
+    conn = await get_db()
+    try:
+        result = await conn.execute(
+            "DELETE FROM expenses WHERE id = $1",
+            expense_id
         )
-        await c.commit()
-        if cur.rowcount == 0:
-            return {"status": "error", "message": "Expense not found or not yours"}
+        if result == "DELETE 0":
+            return {"status": "error", "message": "Expense not found"}
         return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
 
 # ── Resource ──────────────────────────────────────────────────────────────────
 @mcp.resource("expense:///categories", mime_type="application/json")
@@ -146,5 +138,5 @@ def categories() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    mcp.run()
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    # mcp.run()
