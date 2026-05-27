@@ -1,0 +1,14 @@
+# Virtual environments
+.venv/
+
+# Python cache files
+__pycache__/
+
+
+# Environment variables (Crucial: Keep API keys out of version control)
+.env
+.env.local
+.oauth_tokens.json
+
+# IDE and OS specific files
+.vscode/

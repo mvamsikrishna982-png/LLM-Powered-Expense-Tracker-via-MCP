@@ -8,9 +8,18 @@ import os, sys, json, sqlite3, aiosqlite
 load_dotenv()
 
 
+
 try:
     # ── Auth ──────────────────────────────────────────────────────────────────────
-    mcp = FastMCP("ExpenseTracker")
+    auth = GoogleProvider(
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        base_url=os.environ["BASE_URL"]
+    )
+    mcp = FastMCP("ExpenseTracker", auth=auth)
+    # mcp = FastMCP("ExpenseTracker")
+
+    # ── DB path (use a mounted volume on Railway/Render, not /tmp) ────────────────
     TEMP_DIR = tempfile.gettempdir()
     DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
     # DB_PATH = os.environ.get("DB_PATH", "expenses.db")
