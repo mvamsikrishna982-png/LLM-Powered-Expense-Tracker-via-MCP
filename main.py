@@ -3,6 +3,7 @@ from fastmcp.server.dependencies import get_access_token
 from dotenv import load_dotenv
 import os, json, asyncpg
 from contextlib import asynccontextmanager
+from ValidationModels import ExpenseInput,DateRangeInput,SummarizeInput
 
 load_dotenv()
 
@@ -53,15 +54,14 @@ mcp = FastMCP("ExpenseTracker", lifespan=lifespan)
 
 # Tools
 @mcp.tool()
-async def add_expense(date: str, amount: float, category: str,
-                      subcategory: str = "", note: str = "") -> dict:
+async def add_expense(expense: ExpenseInput) -> dict:
     """Add a new expense. date must be YYYY-MM-DD."""
     conn = await get_db()
     try:
         row = await conn.fetchrow(
                 "INSERT INTO expenses(date, amount, category, subcategory, note)"
                 " VALUES($1, $2, $3, $4, $5) RETURNING id",
-                date, amount, category, subcategory, note
+                expense.date, expense.amount, expense.category, expense.subcategory, expense.note
                 )
         return {"status": "success", "id": row["id"]}
     except Exception as e:
@@ -71,7 +71,7 @@ async def add_expense(date: str, amount: float, category: str,
         
 
 @mcp.tool()
-async def list_expenses(start_date: str, end_date: str) -> list:
+async def list_expenses(inputDate: DateRangeInput) -> list:
     """List expenses between start_date and end_date (YYYY-MM-DD)."""
     conn = await get_db()
     try:
@@ -80,7 +80,7 @@ async def list_expenses(start_date: str, end_date: str) -> list:
             " FROM expenses"
             " WHERE date BETWEEN $1 AND $2"
             " ORDER BY date DESC, id DESC",
-            start_date, end_date
+            inputDate.start_date, inputDate.end_date
         )
         return [dict(r) for r in rows]
     except Exception as e:
@@ -89,17 +89,16 @@ async def list_expenses(start_date: str, end_date: str) -> list:
         await conn.close()
 
 @mcp.tool()
-async def summarize(start_date: str, end_date: str,
-                    category: str = "") -> list:
+async def summarize(summrizerData:SummarizeInput) -> list:
     """Summarize spending by category between start_date and end_date."""
     query = (
         "SELECT category, SUM(amount) AS total_amount, COUNT(*) AS count"
         " FROM expenses WHERE date BETWEEN $1 AND $2"
     )
-    params = [start_date, end_date]
-    if category:
+    params = [summrizerData.start_date, summrizerData.end_date]
+    if summrizerData.category:
         query += " AND category = $3"
-        params.append(category)
+        params.append(summrizerData.category)
     query += " GROUP BY category ORDER BY total_amount DESC"
     conn = await get_db()
     try:
